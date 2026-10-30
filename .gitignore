@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/raw/
+data/geocache.json
+__pycache__/
+.venv/
+web/shot.mjs
+*.log
+.DS_Store
