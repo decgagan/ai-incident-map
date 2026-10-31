@@ -75,7 +75,7 @@
 <main>
   <header>
     <h1>&gt; AI_INCIDENT_MAP<span class="cur">_</span></h1>
-    <p>{shown.length} of {incidents.length} most recent incidents · <span class="key dot"></span> place / HQ <span class="key ring"></span> country only</p>
+    <p>{shown.length} of {incidents.length} most recent incidents · <span class="legend">fewer <span class="ramp"></span> more incidents</span> · <span class="key dot"></span> place / HQ <span class="key ring"></span> country only</p>
   </header>
   <label class="toggle" class:on={hideResearch}>
     <input type="checkbox" bind:checked={hideResearch} onchange={() => sel = null} />
@@ -88,18 +88,21 @@
   </nav>
   <div class="map" bind:this={box}>
     <svg bind:this={svg} viewBox="0 0 {W} {H}" width={W} height={H} role="img" aria-label="World map of AI incidents" onclick={(e) => e.target === svg && (sel = null)}>
-      <defs><filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+      <defs><radialGradient id="heat"><stop offset="0" stop-color="#ff5a1e" stop-opacity=".55"/><stop offset=".35" stop-color="#e01010" stop-opacity=".3"/><stop offset="1" stop-color="#600" stop-opacity="0"/></radialGradient><filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
       <g class="zoom">
         <path class="sphere" d={sphere} />
         <path class="grat" d={grat} />
         <path class="land" d={land} />
         <path class="borders" d={borders} />
+        <g class="heat" style="isolation:isolate">
+          {#each shown as d (d.id)}<circle cx={d.x} cy={d.y} r={(d.precision === 'country' ? 30 : 22) / Math.sqrt(k)} fill="url(#heat)" />{/each}
+        </g>
         {#each shown as d (d.id)}
           <g class="pt {d.precision}" class:active={sel?.id === d.id} transform="translate({d.x},{d.y}) scale({1 / Math.sqrt(k)})"
              role="button" tabindex="0" aria-label={d.title}
              onclick={(e) => { e.stopPropagation(); sel = d }} onkeydown={(e) => e.key === 'Enter' && (sel = d)}>
             <circle r="9" class="hit" />
-            {#if d.precision === 'country'}<circle r="3.6" class="ring" />{:else}<circle r="2.8" class="dot" filter="url(#glow)" />{/if}
+            {#if d.precision === 'country'}<circle r="2.6" class="ring" style="opacity:{Math.min(1, .35 + k / 5)}" />{:else}<circle r="1.8" class="dot" style="opacity:{Math.min(1, .45 + k / 5)}" />{/if}
           </g>
         {/each}
       </g>
@@ -134,8 +137,10 @@
   .land{fill:#06240f;stroke:none}
   .borders{fill:none;stroke:#1d6b35;stroke-width:.4}
   .pt{cursor:pointer}.hit{fill:transparent}
-  .dot{fill:var(--g)}
-  .ring{fill:rgba(57,255,106,.12);stroke:#5fd47e;stroke-width:1;stroke-dasharray:1.5 1.2}
+  .heat circle{mix-blend-mode:plus-lighter;pointer-events:none}
+  .dot{fill:#ffd2b0}
+  .ring{fill:rgba(255,80,40,.15);stroke:#ff8a6a;stroke-width:.8;stroke-dasharray:1.5 1.2}
+  .legend{white-space:nowrap}.ramp{display:inline-block;width:70px;height:8px;vertical-align:middle;margin:0 4px;border-radius:4px;background:linear-gradient(90deg,#300,#b00,#ff3a10,#ffb070,#fff4e8)}
   .pt.active .dot,.pt.active .ring{fill:#fff;stroke:#fff}
   .pt:focus{outline:none}.pt:focus-visible .hit{stroke:#fff;stroke-width:.8}
   .pop{position:absolute;right:16px;top:110px;width:min(380px,calc(100% - 32px));max-height:calc(100% - 160px);overflow:auto;background:rgba(1,12,5,.95);border:1px solid var(--g);box-shadow:0 0 18px rgba(57,255,106,.35);padding:14px 16px;border-radius:4px;font-size:13px;line-height:1.45}
@@ -143,7 +148,7 @@
   .meta{font-size:11px;color:#8be3a3}.tag{color:var(--g)}.st{border:1px solid var(--gd);padding:0 4px}
   .sum{color:#bfe9cb;margin:6px 0 8px}.loc{font-size:11px;color:#8be3a3;margin-bottom:6px}
   .x{position:absolute;right:6px;top:4px;background:none;border:0;color:var(--g);font-size:20px;cursor:pointer}
-  .key{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 2px 0 6px;vertical-align:middle}.key.dot{background:var(--g);box-shadow:0 0 6px var(--g)}.key.ring{border:1px dashed #5fd47e}
+  .key{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 2px 0 6px;vertical-align:middle}.key.dot{background:#ffd2b0;box-shadow:0 0 6px #f40}.key.ring{border:1px dashed #ff8a6a}
   .toggle{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#c9ffd6;cursor:pointer;align-self:flex-start;border:1px solid var(--gd);padding:5px 10px;border-radius:3px;background:rgba(2,12,5,.85)}
   .toggle.on{border-color:var(--g);box-shadow:0 0 8px rgba(57,255,106,.5)}
   .toggle input{position:absolute;opacity:0;width:1px;height:1px}.toggle:focus-within{outline:1px solid #fff}
