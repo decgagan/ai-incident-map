@@ -8,7 +8,7 @@ A world map of recent real-world AI incidents (hacks, scams, deepfakes, safety f
 
 ## What it does
 
-- Plots the 100 most recent incidents from the [AI Incident Index](https://www.aiincidentindex.com/).
+- Plots 7,354 of the 7,669 incidents (all of them as of 1 Nov 2026) from the [AI Incident Index](https://www.aiincidentindex.com/).
 - Filter by category. "Hacking" is the Index's *Security and cyberattacks* category.
 - **Hide research & policy news**: switch off studies, warnings, lab tests and policy stories, and keep only things that actually happened. Off by default.
 - Click a point for the date, category, evidence status, summary and a link to the original record.
@@ -26,11 +26,12 @@ The map positions and the research/event labels are **my estimates**, not the In
 
 The Index gives a country for each incident, but no coordinates. `scripts/geolocate.py` tries three tiers in order:
 
-| Tier | Method | Share (current 100) |
+| Tier | Method | Share (all 7,669) |
 |---|---|---|
-| `place` | spaCy (`en_core_web_sm`) finds place names in the title and summary. Nominatim (OpenStreetMap) geocodes them, restricted to the stated country. Only well-known towns, cities and regions are accepted. | 20% |
-| `hq` | Headquarters of the main organisation, from Wikidata, if it is in the same country | 36% |
-| `country` | Centre of the stated country | 44% |
+| `place` | spaCy (`en_core_web_sm`) finds place names in the title and summary. Nominatim (OpenStreetMap) geocodes them, restricted to the stated country. Only well-known towns, cities and regions are accepted. Lookups are cached; set `NOM_CACHED_ONLY=1` to skip uncached ones and fall back to HQ/country. | 22% |
+| `hq` | Headquarters of the main organisation, from Wikidata, if it is in the same country | 32% |
+| `country` | Centre of the stated country | 42% |
+| none | No country and no organisation HQ found, so not plotted | 4% (315) |
 
 Limits:
 - The place tier was noisy at first. "AI" matched a hamlet called Ai in Ohio, and "Russia" matched a town in New York. Short all-caps words, nationality words and other countries' names are now ignored, at the cost of fewer precise matches.
@@ -44,7 +45,7 @@ Limits:
 
 > score = research keywords (study, researchers, experiment, simulated, warns, calls for, regulation, policy…) − event keywords (sued, fined, arrested, breach, scam, died, crashed…) + 1 if the Index says *Potential harm*, − 1 if *Actual harm*. The record counts as research/policy if the score is 1 or more and it has at least one research keyword.
 
-The current 100 split into 76 events and 24 research/policy items. A hand check of 15 records agreed on 14. It is meant as a quick filter, not ground truth.
+All 7,669 split into 6,447 events and 1,222 research/policy items. A hand check of 15 records agreed on 14. It is meant as a quick filter, not ground truth.
 
 ## Running it
 
@@ -52,7 +53,7 @@ The current 100 split into 76 events and 24 research/policy items. A hand check 
 # data pipeline (Python 3.11+)
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-python scripts/refresh.py          # scrape -> geolocate -> classify -> export (N_INCIDENTS=100)
+python scripts/refresh.py          # scrape -> geolocate -> classify -> export (all incidents; N_INCIDENTS=100 for the newest 100)
 
 # web app (Node 20+)
 cd web && npm install && npm run dev
@@ -62,7 +63,7 @@ A first run takes a few minutes because of the polite delays. Later runs use the
 
 ## Deployment
 
-- Svelte 5 + Vite, D3 for the map (Natural Earth projection, 110m world TopoJSON). No map tiles, so it stays light (about 40 kB of JavaScript, gzipped).
+- Svelte 5 + Vite, D3 for the map (Natural Earth projection, 110m world TopoJSON). No map tiles, so it stays light (about 45 kB of JavaScript, gzipped).
 - Every push to `main` deploys to Cloudflare Pages via `.github/workflows/deploy.yml`. It needs the repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 - `.github/workflows/refresh.yml` reruns the data pipeline. It is **manual only** for now (`workflow_dispatch`). A monthly schedule can be added later.
 

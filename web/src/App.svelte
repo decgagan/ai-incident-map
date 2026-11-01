@@ -6,9 +6,10 @@
   import { feature, mesh } from 'topojson-client'
   import Matrix from './Matrix.svelte'
 
-  let W = $state(960), H = $state(500), topo = null, raw = [], box
-  let proj = $state(geoNaturalEarth1()), land = $state(''), borders = $state(''), sphere = $state(''), grat = $state('')
-  let incidents = $state([]), filter = $state('All'), hideResearch = $state(false), sel = $state(null), k = $state(1), svg, zoomer
+  let W = $state(960), H = $state(500), topo = null, raw = [], box, svg, cv, zoomer
+  let land = $state(''), borders = $state(''), sphere = $state(''), grat = $state('')
+  let incidents = $state.raw([]), filter = $state('All'), hideResearch = $state(false), sel = $state(null), summary = $state('')
+  let tr = zoomIdentity, hover = $state(false)
 
   const HACK = 'Security and cyberattacks'
   const short = (c) => c === HACK ? 'Hacking' : c?.split(/,| and /)[0]
@@ -18,18 +19,93 @@
   const shown = $derived(filter === 'All' ? pool : pool.filter(d => d.category === filter))
   const nResearch = $derived(incidents.filter(d => d.kind === 'research').length)
 
-  // golden-angle spiral jitter so stacked points spread out
+  // golden-angle spiral so incidents stacked on one spot (e.g. a country centre) spread out and stay clickable when zoomed
   function place(list, p) {
     const groups = {}
     return list.map(d => {
-      const [x, y] = p([d.lon, d.lat]); const key = Math.round(x / 3) + ',' + Math.round(y / 3)
+      const [x, y] = p([d.lon, d.lat]); const key = Math.round(x / 2) + ',' + Math.round(y / 2)
       const n = groups[key] = (groups[key] ?? -1) + 1
-      const r = n ? 3.2 * Math.sqrt(n) : 0, a = n * 2.39996
+      const r = n ? 1.6 * Math.sqrt(n) : 0, a = n * 2.39996
       return { ...d, x: x + r * Math.cos(a), y: y + r * Math.sin(a) }
     })
   }
   // inhabited latitudes only, so the map isn't mostly ice
   const frame = { type: 'Polygon', coordinates: [[[-180, -56], [180, -56], [180, 78], [-180, 78], [-180, -56]].reverse()] }
+
+  // ---- canvas layer: binary-digit heat + small glowing dots (fast enough for thousands of points) ----
+  const CELL = 9
+  const bit = (a, b) => { let h = Math.imul(a, 374761393) + Math.imul(b, 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return (h ^ (h >>> 16)) & 1 ? '1' : '0' }
+  const sprite = (draw, s = 16) => { const c = document.createElement('canvas'); c.width = c.height = s; draw(c.getContext('2d'), s / 2); return c }
+  let dotS, ringS, selS
+  function sprites() {
+    const dpr = devicePixelRatio || 1, s = Math.ceil(16 * dpr)
+    dotS = sprite((g, h) => { const r = g.createRadialGradient(h, h, 0, h, h, h); r.addColorStop(0, 'rgba(255,120,105,.95)'); r.addColorStop(.22, 'rgba(240,60,50,.85)'); r.addColorStop(.45, 'rgba(200,30,30,.22)'); r.addColorStop(1, 'rgba(120,0,0,0)'); g.fillStyle = r; g.fillRect(0, 0, 2 * h, 2 * h) }, s)
+    ringS = sprite((g, h) => { g.strokeStyle = 'rgba(255,110,100,.75)'; g.lineWidth = dpr; g.setLineDash([1.5 * dpr, 1.2 * dpr]); g.beginPath(); g.arc(h, h, h * .32, 0, 7); g.stroke() }, s)
+    selS = sprite((g, h) => { g.fillStyle = '#fff'; g.shadowColor = '#fff'; g.shadowBlur = h * .5; g.beginPath(); g.arc(h, h, h * .3, 0, 7); g.fill() }, s)
+  }
+  let raf = 0
+  const redraw = () => { if (!raf) raf = requestAnimationFrame(draw) }
+  function draw() {
+    raf = 0
+    if (!cv) return
+    const dpr = devicePixelRatio || 1, ctx = cv.getContext('2d')
+    if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr) }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H)
+    const { k, x: tx, y: ty } = tr, pts = shown
+    const cols = Math.ceil(W / CELL) + 1, rows = Math.ceil(H / CELL) + 1, grid = new Float32Array(cols * rows)
+    // anchor the digit grid to the map so digits move with it while panning
+    const ox = ((tx % CELL) + CELL) % CELL - CELL, oy = ((ty % CELL) + CELL) % CELL - CELL
+    const sx = new Float32Array(pts.length), sy = new Float32Array(pts.length)
+    for (let i = 0; i < pts.length; i++) {
+      const X = sx[i] = pts[i].x * k + tx, Y = sy[i] = pts[i].y * k + ty
+      const c = Math.floor((X - ox) / CELL), r = Math.floor((Y - oy) / CELL)
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const cc = c + dx, rr = r + dy; if (cc < 0 || rr < 0 || cc >= cols || rr >= rows) continue
+        grid[rr * cols + cc] += Math.exp(-(dx * dx + dy * dy) / 2.2)
+      }
+    }
+    let mx = 6; for (let i = 0; i < grid.length; i++) if (grid[i] > mx) mx = grid[i]
+    const lm = Math.log1p(mx)
+    // soft red under-glow: the density grid scaled up with smoothing
+    const im = new ImageData(cols, rows)
+    for (let i = 0; i < grid.length; i++) if (grid[i] > 0) { const v = Math.log1p(grid[i]) / lm; im.data[i * 4] = 200 + 40 * v; im.data[i * 4 + 1] = 25 + 30 * v; im.data[i * 4 + 2] = 25; im.data[i * 4 + 3] = 95 * v * v }
+    const gc = new OffscreenCanvas(cols, rows); gc.getContext('2d').putImageData(im, 0, 0)
+    ctx.save(); ctx.imageSmoothingEnabled = true; ctx.globalCompositeOperation = 'lighter'; ctx.filter = 'blur(6px)'
+    ctx.drawImage(gc, ox + CELL / 2, oy + CELL / 2, cols * CELL, rows * CELL); ctx.restore()
+    // Matrix-style binary digits, brighter where incidents cluster
+    ctx.font = `bold ${CELL + 1}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    const gx = Math.round(-tx / CELL), gy = Math.round(-ty / CELL)
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const g = grid[r * cols + c]; if (g < .08) continue
+      const v = Math.log1p(g) / lm
+      ctx.fillStyle = `rgba(${235 + 20 * v | 0},${45 + 120 * v * v | 0},${40 + 90 * v * v | 0},${.12 + .7 * v})`
+      ctx.fillText(bit(c + gx, r + gy), ox + c * CELL + CELL / 2, oy + r * CELL + CELL / 2)
+    }
+    // small dots on top (country-only ones as dashed rings)
+    const s = 16 * Math.min(1.8, .75 * Math.pow(k, .3)), h = s / 2
+    // normal blending (not additive) so thousands of stacked dots don't burn out to white
+    ctx.globalAlpha = .8
+    for (let i = 0; i < pts.length; i++) {
+      const X = sx[i], Y = sy[i]; if (X < -h || Y < -h || X > W + h || Y > H + h) continue
+      ctx.drawImage(pts[i].precision === 'country' ? ringS : dotS, X - h, Y - h, s, s)
+    }
+    ctx.globalAlpha = 1
+    if (sel) { const X = sel.x * k + tx, Y = sel.y * k + ty; ctx.drawImage(selS, X - h, Y - h, s, s) }
+  }
+  $effect(() => { shown; sel; W; H; redraw() })
+
+  // nearest incident within a few pixels of the pointer
+  function pick(e) {
+    const r = svg.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top
+    const { k, x: tx, y: ty } = tr, lim = Math.max(8, 4 * Math.pow(k, .3)) ** 2
+    let best = null, bd = lim
+    for (const d of shown) { const dx = d.x * k + tx - mx, dy = d.y * k + ty - my, q = dx * dx + dy * dy; if (q < bd) { bd = q; best = d } }
+    return best
+  }
+  function open(d) {
+    sel = d; summary = ''
+    if (d) fetch(`/summaries/${d.s}.json`).then(r => r.json()).then(m => { if (sel?.id === d.id) summary = m[d.id] ?? '' }).catch(() => {})
+  }
 
   function layout() {
     if (!topo || !box) return
@@ -43,16 +119,15 @@
       const [[x0], [x1]] = geoPath(p).bounds(frame)
       p.translate([p.translate()[0] - x0 + 4, p.translate()[1]])
     } else p.fitExtent([[6, 6], [cw - 6, ch - 6]], frame)
-    proj = p
     const path = geoPath(p)
     const countries = feature(topo, topo.objects.countries)
     countries.features = countries.features.filter(f => f.id !== '010')
     land = path(countries); borders = path(mesh(topo, topo.objects.countries, (a, b) => a !== b))
     sphere = path({ type: 'Sphere' }); grat = path(geoGraticule10())
-    incidents = place(raw, p)
+    incidents = place(raw, p); sel = null
     const [[bx0, by0], [bx1, by1]] = path.bounds(frame)
-    zoomer = d3zoom().scaleExtent([1, 12]).translateExtent([[Math.min(0, bx0), Math.min(0, by0)], [Math.max(cw, bx1), Math.max(ch, by1)]])
-      .on('zoom', e => { select(svg).select('g.zoom').attr('transform', e.transform); k = e.transform.k })
+    zoomer = d3zoom().scaleExtent([1, 20]).translateExtent([[Math.min(0, bx0), Math.min(0, by0)], [Math.max(cw, bx1), Math.max(ch, by1)]])
+      .on('zoom', e => { tr = e.transform; select(svg).select('g.zoom').attr('transform', tr); redraw() })
     select(svg).call(zoomer).on('dblclick.zoom', null)
     // portrait: start centred on Europe/Africa
     const t = portrait ? zoomIdentity.translate(cw / 2 - p([12, 30])[0], 0) : zoomIdentity
@@ -60,6 +135,7 @@
   }
 
   onMount(() => {
+    sprites()
     Promise.all([fetch('/countries-110m.json').then(r => r.json()), fetch('/incidents.json').then(r => r.json())]).then(([t, inc]) => {
       topo = t; raw = inc.sort((a, b) => a.date < b.date ? 1 : -1); layout()
     })
@@ -75,7 +151,7 @@
 <main>
   <header>
     <h1>&gt; AI_INCIDENT_MAP<span class="cur">_</span></h1>
-    <p>{shown.length} of {incidents.length} most recent incidents · <span class="legend">fewer <span class="ramp"></span> more incidents</span> · <span class="key dot"></span> place / HQ <span class="key ring"></span> country only</p>
+    <p>{shown.length.toLocaleString('en-GB')} of {incidents.length.toLocaleString('en-GB')} incidents · <span class="legend">fewer <span class="ramp"></span> more incidents</span> · <span class="key dot"></span> place / HQ <span class="key ring"></span> country only</p>
   </header>
   <label class="toggle" class:on={hideResearch}>
     <input type="checkbox" bind:checked={hideResearch} onchange={() => sel = null} />
@@ -87,33 +163,23 @@
     {/each}
   </nav>
   <div class="map" bind:this={box}>
-    <svg bind:this={svg} viewBox="0 0 {W} {H}" width={W} height={H} role="img" aria-label="World map of AI incidents" onclick={(e) => e.target === svg && (sel = null)}>
-      <defs><radialGradient id="heat"><stop offset="0" stop-color="#e8321e" stop-opacity=".28"/><stop offset=".4" stop-color="#b00c0c" stop-opacity=".16"/><stop offset="1" stop-color="#400" stop-opacity="0"/></radialGradient><filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+    <svg bind:this={svg} viewBox="0 0 {W} {H}" width={W} height={H} role="img" aria-label="World map of AI incidents. Click a red point for details." class:hover
+         onclick={(e) => open(pick(e))} onpointermove={(e) => hover = e.pointerType === 'mouse' && !!pick(e)}>
       <g class="zoom">
         <path class="sphere" d={sphere} />
         <path class="grat" d={grat} />
         <path class="land" d={land} />
         <path class="borders" d={borders} />
-        <g class="heat" style="isolation:isolate">
-          {#each shown as d (d.id)}<circle cx={d.x} cy={d.y} r={(d.precision === 'country' ? 30 : 22) / Math.sqrt(k)} fill="url(#heat)" />{/each}
-        </g>
-        {#each shown as d (d.id)}
-          <g class="pt {d.precision}" class:active={sel?.id === d.id} transform="translate({d.x},{d.y}) scale({1 / Math.sqrt(k)})"
-             role="button" tabindex="0" aria-label={d.title}
-             onclick={(e) => { e.stopPropagation(); sel = d }} onkeydown={(e) => e.key === 'Enter' && (sel = d)}>
-            <circle r="9" class="hit" />
-            {#if d.precision === 'country'}<circle r="2.6" class="ring" />{:else}<circle r="2" class="dot" filter="url(#glow)" />{/if}
-          </g>
-        {/each}
       </g>
     </svg>
+    <canvas bind:this={cv} style="width:{W}px;height:{H}px" aria-hidden="true"></canvas>
   </div>
   {#if sel}
     <aside class="pop" aria-live="polite">
       <button class="x" aria-label="Close" onclick={() => sel = null}>×</button>
       <div class="meta">{#if sel.kind === 'research'}<span class="rk">RESEARCH / POLICY</span> · {/if}{fmt(sel.date)} · <span class="tag">{short(sel.category)}</span> · <span class="st">{sel.status}</span></div>
       <h2>{sel.title}</h2>
-      <p class="sum">{sel.summary}</p>
+      <p class="sum">{summary || '…'}</p>
       <div class="loc">📍 {sel.precision === 'place' ? sel.place.split(',').slice(0,2).join(',') : sel.precision === 'hq' ? sel.place : sel.country + ' (country only)'}</div>
       <a href={sel.url} target="_blank" rel="noopener">{sel.id} ↗</a>
     </aside>
@@ -132,23 +198,20 @@
   nav small{opacity:.7}
   .map{flex:1;min-height:0;position:relative;overflow:hidden}
   svg{width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+  .sphere,.grat,.borders{vector-effect:non-scaling-stroke}
   .sphere{fill:rgba(1,10,4,.75);stroke:var(--gd);stroke-width:.6}
   .grat{fill:none;stroke:#0c3a19;stroke-width:.4}
   .land{fill:#06240f;stroke:none}
-  .borders{fill:none;stroke:#1d6b35;stroke-width:.4}
-  .pt{cursor:pointer}.hit{fill:transparent}
-  .heat circle{mix-blend-mode:plus-lighter;pointer-events:none}
-  .dot{fill:#ff3b3b}
-  .ring{fill:rgba(255,59,59,.12);stroke:#ff6b6b;stroke-width:1;stroke-dasharray:1.5 1.2}
-  .legend{white-space:nowrap}.ramp{display:inline-block;width:70px;height:8px;vertical-align:middle;margin:0 4px;border-radius:4px;background:linear-gradient(90deg,#200,#600,#a11,#e8321e,#ff6a50)}
-  .pt.active .dot,.pt.active .ring{fill:#fff;stroke:#fff}
-  .pt:focus{outline:none}.pt:focus-visible .hit{stroke:#fff;stroke-width:.8}
+  .borders{fill:none;stroke:#1d6b35;stroke-width:.6}
+  svg.hover{cursor:pointer}
+  canvas{position:absolute;left:0;top:0;pointer-events:none}
+  .legend{white-space:nowrap}.ramp{display:inline-block;width:70px;height:8px;vertical-align:middle;margin:0 4px;border-radius:4px;background:linear-gradient(90deg,#1a0404,#4a0c0c,#8c1a1a,#d0403a,#ff8a78)}
   .pop{position:absolute;right:16px;top:110px;width:min(380px,calc(100% - 32px));max-height:calc(100% - 160px);overflow:auto;background:rgba(1,12,5,.95);border:1px solid var(--g);box-shadow:0 0 18px rgba(57,255,106,.35);padding:14px 16px;border-radius:4px;font-size:13px;line-height:1.45}
   .pop h2{font-size:15px;margin:6px 0;color:#eafff0}
   .meta{font-size:11px;color:#8be3a3}.tag{color:var(--g)}.st{border:1px solid var(--gd);padding:0 4px}
   .sum{color:#bfe9cb;margin:6px 0 8px}.loc{font-size:11px;color:#8be3a3;margin-bottom:6px}
   .x{position:absolute;right:6px;top:4px;background:none;border:0;color:var(--g);font-size:20px;cursor:pointer}
-  .key{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 2px 0 6px;vertical-align:middle}.key.dot{background:#ff3b3b;box-shadow:0 0 6px #ff3b3b}.key.ring{border:1px dashed #ff6b6b}
+  .key{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 2px 0 6px;vertical-align:middle}.key.dot{background:#f04a40;box-shadow:0 0 6px #f04a40}.key.ring{border:1px dashed #ff6b6b}
   .toggle{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#c9ffd6;cursor:pointer;align-self:flex-start;border:1px solid var(--gd);padding:5px 10px;border-radius:3px;background:rgba(2,12,5,.85)}
   .toggle.on{border-color:var(--g);box-shadow:0 0 8px rgba(57,255,106,.5)}
   .toggle input{position:absolute;opacity:0;width:1px;height:1px}.toggle:focus-within{outline:1px solid #fff}

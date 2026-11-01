@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       n:
-        description: Number of most recent incidents
-        default: '100'
+        description: Number of most recent incidents (0 = all)
+        default: '0'
 permissions:
   contents: write
   actions: write
@@ -23,6 +23,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/incidents.json web/public/incidents.json
+          git add data/incidents.json web/public/incidents.json web/public/summaries
           git diff --cached --quiet || (git commit -m "Data refresh $(date -u +%Y-%m-%d)" && git push && gh workflow run deploy.yml --ref main)
         env: { GH_TOKEN: "${{ github.token }}" }
