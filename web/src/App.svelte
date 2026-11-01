@@ -84,8 +84,10 @@
     // small dots on top (country-only ones as dashed rings)
     const s = 16 * Math.min(1.8, .75 * Math.pow(k, .3)), h = s / 2
     // normal blending (not additive) so thousands of stacked dots don't burn out to white
-    ctx.globalAlpha = .8
-    for (let i = 0; i < pts.length; i++) {
+    // dots hidden at world view, fade in from 2x zoom, fully visible from 6x (clicks work at every zoom)
+    const fade = Math.min(1, Math.max(0, (k - 2) / 4))
+    ctx.globalAlpha = .8 * fade * fade * (3 - 2 * fade)
+    if (ctx.globalAlpha > 0) for (let i = 0; i < pts.length; i++) {
       const X = sx[i], Y = sy[i]; if (X < -h || Y < -h || X > W + h || Y > H + h) continue
       ctx.drawImage(pts[i].precision === 'country' ? ringS : dotS, X - h, Y - h, s, s)
     }
