@@ -33,7 +33,7 @@
   const frame = { type: 'Polygon', coordinates: [[[-180, -56], [180, -56], [180, 78], [-180, 78], [-180, -56]].reverse()] }
 
   // ---- canvas layer: binary-digit heat + small glowing dots (fast enough for thousands of points) ----
-  const CELL = 9
+  const CELL = 4, KR = 5  // tight digit grid; kernel radius in cells keeps the same ~20px spread
   const bit = (a, b) => { let h = Math.imul(a, 374761393) + Math.imul(b, 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return (h ^ (h >>> 16)) & 1 ? '1' : '0' }
   const sprite = (draw, s = 16) => { const c = document.createElement('canvas'); c.width = c.height = s; draw(c.getContext('2d'), s / 2); return c }
   let dotS, ringS, selS
@@ -59,9 +59,9 @@
     for (let i = 0; i < pts.length; i++) {
       const X = sx[i] = pts[i].x * k + tx, Y = sy[i] = pts[i].y * k + ty
       const c = Math.floor((X - ox) / CELL), r = Math.floor((Y - oy) / CELL)
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      for (let dy = -KR; dy <= KR; dy++) for (let dx = -KR; dx <= KR; dx++) {
         const cc = c + dx, rr = r + dy; if (cc < 0 || rr < 0 || cc >= cols || rr >= rows) continue
-        grid[rr * cols + cc] += Math.exp(-(dx * dx + dy * dy) / 2.2)
+        grid[rr * cols + cc] += Math.exp(-(dx * dx + dy * dy) / 11) * .2
       }
     }
     let mx = 6; for (let i = 0; i < grid.length; i++) if (grid[i] > mx) mx = grid[i]
@@ -70,10 +70,10 @@
     const im = new ImageData(cols, rows)
     for (let i = 0; i < grid.length; i++) if (grid[i] > 0) { const v = Math.log1p(grid[i]) / lm; im.data[i * 4] = 200 + 40 * v; im.data[i * 4 + 1] = 25 + 30 * v; im.data[i * 4 + 2] = 25; im.data[i * 4 + 3] = 95 * v * v }
     const gc = new OffscreenCanvas(cols, rows); gc.getContext('2d').putImageData(im, 0, 0)
-    ctx.save(); ctx.imageSmoothingEnabled = true; ctx.globalCompositeOperation = 'lighter'; ctx.filter = 'blur(6px)'
+    ctx.save(); ctx.imageSmoothingEnabled = true; ctx.globalCompositeOperation = 'lighter'; ctx.filter = 'blur(5px)'
     ctx.drawImage(gc, ox + CELL / 2, oy + CELL / 2, cols * CELL, rows * CELL); ctx.restore()
     // Matrix-style binary digits, brighter where incidents cluster
-    ctx.font = `bold ${CELL + 1}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.font = `bold ${CELL + 1.5}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
     const gx = Math.round(-tx / CELL), gy = Math.round(-ty / CELL)
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
       const g = grid[r * cols + c]; if (g < .08) continue
